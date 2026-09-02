@@ -37,7 +37,7 @@ function blockWithHits(items: readonly FeedItem[]): string {
 }
 
 async function main() {
-  const { items } = await ingestFeeds();
+  const { items } = await ingestFeeds({ cached: false });
 
   const unmatched = items.filter((item) => !classifyWithMatch(item.title, item.excerpt).matched);
 

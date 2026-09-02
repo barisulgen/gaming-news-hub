@@ -152,9 +152,15 @@ not a gap to be closed.
 
 Both routes are statically generated and revalidated every 15 minutes
 (`export const revalidate = 900` in [page.tsx](src/app/page.tsx) and
-[sources/page.tsx](src/app/sources/page.tsx)). Individual feed fetches carry the
-same `revalidate`, so the two tabs share one fetch rather than each hitting all
-15 feeds.
+[sources/page.tsx](src/app/sources/page.tsx)).
+
+Underneath, what gets cached is the *parsed result* of each feed, not the feed
+itself. [ingest.ts](src/lib/ingest.ts) fetches with `cache: "no-store"` and
+wraps the parsed items in `unstable_cache`, keyed per source. Caching the raw
+XML instead would write complete article bodies to disk — the thing this app
+promises not to store — and GameDev Reports' 2.4 MB feed would exceed Next's
+2 MB cache-item limit and log an error on every render. Both tabs share the one
+cached result rather than each hitting all 15 feeds.
 
 A request arriving inside the window is served the cached page immediately. The
 first request after the window expires gets the cached page too, and triggers a
@@ -165,8 +171,9 @@ There is no cron and no background job. Feeds are fetched because someone asked
 for the page.
 
 **Check now**, on the Sources tab, forces a re-fetch without waiting out the
-window. Every feed fetch carries the `feeds` cache tag, and the button's server
-action in [actions.ts](src/app/actions.ts) expires that tag with `updateTag`.
+window. Every cached feed result carries the `feeds` cache tag, and the button's
+server action in [actions.ts](src/app/actions.ts) expires that tag with
+`updateTag`.
 `revalidateTag` would not do — in Next 16 it takes a cache-life profile and
 defers, whereas the render right after the click has to see the new data.
 Expect the counts to come back identical much of the time; publishers do not

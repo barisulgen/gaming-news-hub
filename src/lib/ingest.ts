@@ -1,3 +1,4 @@
+import { unstable_cache } from "next/cache";
 import Parser from "rss-parser";
 
 import { toExcerpt } from "./excerpt";
@@ -105,7 +106,17 @@ function parseTimestamp(item: RawItem): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-function toFeedItem(raw: RawItem, source: Source, now: number): FeedItem | null {
+/**
+ * Everything about an item that does not depend on the current time.
+ *
+ * This is the shape that gets cached. It carries a raw `timestamp` but none of
+ * the formatted date fields, because those are relative to "now" and would
+ * otherwise be baked into a 15 minute cache entry — "Today" would still say
+ * Today tomorrow.
+ */
+type TimelessItem = Omit<FeedItem, "time" | "dayKey" | "dayLabel">;
+
+function toTimelessItem(raw: RawItem, source: Source): TimelessItem | null {
   const link = raw.link?.trim();
   const title = raw.title?.trim();
   // A row with no link cannot be opened or tracked as read, and a row with no
@@ -116,7 +127,6 @@ function toFeedItem(raw: RawItem, source: Source, now: number): FeedItem | null 
   // The full description is read here and never leaves this expression: only
   // the truncated result is kept on the item.
   const excerpt = toExcerpt(pickDescription(raw));
-  const timestamp = parseTimestamp(raw);
 
   return {
     link,
@@ -126,59 +136,57 @@ function toFeedItem(raw: RawItem, source: Source, now: number): FeedItem | null 
     sourceId: source.id,
     sourceName: source.name,
     topic: classify(cleanTitle, excerpt),
-    timestamp,
-    time: formatTime(timestamp),
-    dayKey: formatDayKey(timestamp),
-    dayLabel: formatDayLabel(timestamp, now),
+    timestamp: parseTimestamp(raw),
   };
 }
 
-async function fetchSource(
-  source: Source,
-  now: number,
-): Promise<{ items: FeedItem[]; health: FeedHealth }> {
-  const base = { sourceId: source.id, sourceName: source.name, url: source.url };
+/** Attach the date fields, which depend on when the page is being rendered. */
+function withDates(item: TimelessItem, now: number): FeedItem {
+  return {
+    ...item,
+    time: formatTime(item.timestamp),
+    dayKey: formatDayKey(item.timestamp),
+    dayLabel: formatDayLabel(item.timestamp, now),
+  };
+}
 
+/** What one source contributes, before the age cutoff and cap are applied. */
+interface SourceResult {
+  items: TimelessItem[];
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Fetch and parse one feed, keeping only truncated items.
+ *
+ * `cache: "no-store"` is deliberate. Next's fetch cache would persist the raw
+ * XML — hundreds of KB of complete article bodies per feed, written to
+ * .next/cache — which is exactly what this app promises not to store, and it is
+ * also what made GameDev Reports' 2.4MB feed blow the 2MB cache-item limit and
+ * log an error on every render. The small derived result is cached instead, one
+ * layer up in `readSource`.
+ */
+async function fetchSourceUncached(source: Source): Promise<SourceResult> {
   try {
     const response = await fetch(source.url, {
       headers: REQUEST_HEADERS,
       signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
-      next: { revalidate: REVALIDATE_SECONDS, tags: [FEEDS_TAG] },
+      cache: "no-store",
     });
 
     if (!response.ok) {
-      return {
-        items: [],
-        health: { ...base, itemCount: 0, ok: false, error: `HTTP ${response.status}` },
-      };
+      return { items: [], ok: false, error: `HTTP ${response.status}` };
     }
 
     const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
     const parsed = await parser.parseString(xml);
 
-    const parsedItems = (parsed.items ?? [])
-      .map((raw) => toFeedItem(raw, source, now))
-      .filter((item): item is FeedItem => item !== null);
+    const items = (parsed.items ?? [])
+      .map((raw) => toTimelessItem(raw, source))
+      .filter((item): item is TimelessItem => item !== null);
 
-    // Age cutoff runs before the cap, so a weekly publisher keeps everything it
-    // published this month rather than spending its ten slots on last spring.
-    const cutoff = now - MAX_AGE_DAYS * 86_400_000;
-    const recent = parsedItems.filter((item) => item.timestamp >= cutoff);
-
-    const items = recent
-      // Newest first *before* the cap, so capping keeps the most recent items.
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, MAX_ITEMS_PER_SOURCE);
-
-    return {
-      items,
-      health: {
-        ...base,
-        itemCount: items.length,
-        droppedAsOld: parsedItems.length - recent.length,
-        ok: true,
-      },
-    };
+    return { items, ok: true };
   } catch (error) {
     const message =
       error instanceof Error
@@ -187,8 +195,70 @@ async function fetchSource(
           : error.message
         : "Unknown error";
 
-    return { items: [], health: { ...base, itemCount: 0, ok: false, error: message } };
+    return { items: [], ok: false, error: message };
   }
+}
+
+/**
+ * Cached readers, one per source, built once.
+ *
+ * `unstable_cache` folds a function's arguments into its cache key, so nothing
+ * time-varying may be passed in — hence the cutoff, the cap and the date
+ * formatting all live outside this layer. Rebuilding the wrapper per call would
+ * also defeat it, so the readers are memoised here.
+ */
+const readers = new Map<string, () => Promise<SourceResult>>();
+
+function readSource(source: Source): Promise<SourceResult> {
+  let reader = readers.get(source.id);
+
+  if (!reader) {
+    reader = unstable_cache(() => fetchSourceUncached(source), ["feed", source.id], {
+      revalidate: REVALIDATE_SECONDS,
+      tags: [FEEDS_TAG],
+    });
+    readers.set(source.id, reader);
+  }
+
+  return reader();
+}
+
+async function collectSource(
+  source: Source,
+  now: number,
+  useCache: boolean,
+): Promise<{ items: FeedItem[]; health: FeedHealth }> {
+  const base = { sourceId: source.id, sourceName: source.name, url: source.url };
+  const {
+    items: parsedItems,
+    ok,
+    error,
+  } = useCache ? await readSource(source) : await fetchSourceUncached(source);
+
+  if (!ok) {
+    return { items: [], health: { ...base, itemCount: 0, ok: false, error } };
+  }
+
+  // Age cutoff runs before the cap, so a weekly publisher keeps everything it
+  // published this month rather than spending its ten slots on last spring.
+  const cutoff = now - MAX_AGE_DAYS * 86_400_000;
+  const recent = parsedItems.filter((item) => item.timestamp >= cutoff);
+
+  const items = recent
+    // Newest first *before* the cap, so capping keeps the most recent items.
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, MAX_ITEMS_PER_SOURCE)
+    .map((item) => withDates(item, now));
+
+  return {
+    items,
+    health: {
+      ...base,
+      itemCount: items.length,
+      droppedAsOld: parsedItems.length - recent.length,
+      ok: true,
+    },
+  };
 }
 
 /** Keep the first occurrence of each link, preserving the order given. */
@@ -210,11 +280,17 @@ export function dedupeByLink(items: readonly FeedItem[]): FeedItem[] {
  *
  * A failing feed contributes an error to `health` and nothing to `items`; it
  * never takes the page down with it.
+ *
+ * `cached` must be false outside a Next request. `unstable_cache` needs Next's
+ * incremental cache, which a plain `tsx` script does not have — and the tuning
+ * scripts want live publisher data anyway, not a 15 minute old copy.
  */
-export async function ingestFeeds(): Promise<IngestResult> {
+export async function ingestFeeds({ cached = true } = {}): Promise<IngestResult> {
   const now = Date.now();
 
-  const settled = await Promise.all(SOURCES.map((source) => fetchSource(source, now)));
+  const settled = await Promise.all(
+    SOURCES.map((source) => collectSource(source, now, cached)),
+  );
 
   const merged = settled.flatMap((result) => result.items);
   const items = dedupeByLink(merged).sort((a, b) => b.timestamp - a.timestamp);

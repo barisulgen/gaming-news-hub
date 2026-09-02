@@ -39,7 +39,7 @@ function sample(items: readonly FeedItem[], sourceId: string, count: number): Fe
 
 async function main() {
   const started = Date.now();
-  const { items, health } = await ingestFeeds();
+  const { items, health } = await ingestFeeds({ cached: false });
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 
   console.log(`\nFetched ${SOURCES.length} feeds in ${elapsed}s\n`);

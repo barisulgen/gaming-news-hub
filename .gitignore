@@ -22,6 +22,7 @@ next-env.d.ts
 
 # claude code — the whole directory stays local
 .claude
+CLAUDE.md
 
 # editors and os
 .DS_Store

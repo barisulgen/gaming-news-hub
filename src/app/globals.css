@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #edefec;
+  --color-panel: #e6e9e4;
+  --color-ink: #1b2b3d;
+  /* Meta and excerpt greys are darkened enough to clear 4.5:1 on paper at the
+     small sizes they are used at. */
+  --color-meta: #4f5a66;
+  --color-excerpt: #58636f;
+  --color-rule: #d7dad6;
+  --color-rule-strong: #c3c8c2;
+
+  /* Feed-health status. Topic colours are NOT duplicated here — they live only
+     in TOPICS in lib/topics.ts, and rows and rail swatches read them from that
+     array, so there is one place to change a topic colour. */
+  --color-bad: #a8452b;
+  --color-warn: #8a6d1f;
+  --color-good: #2e6f4e;
+
+  /* latin-ext covers the Turkish characters in Türk Oyun Sektörü headlines.
+     Anything outside both subsets falls through to the browser's own
+     per-character fallback. */
+  --font-display: var(--font-newsreader), serif;
+  --font-ui: var(--font-archivo), system-ui, sans-serif;
+}
+
+html {
+  background-color: var(--color-paper);
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Times form a column in the row gutter; proportional digits would break it. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+/* Motion appears only in response to a click — the dimming of a row when it is
+   marked read. Nothing animates on load, scroll, or hover. */
+.read-fade {
+  transition: opacity 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .read-fade {
+    transition: none;
+  }
+}

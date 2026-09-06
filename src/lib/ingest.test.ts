@@ -125,6 +125,23 @@ describe("transient failure handling", () => {
     expect([...calls.values()].every((n) => n === 1)).toBe(true);
   });
 
+  it("reports why a request was rejected, not just the status", async () => {
+    vi.stubGlobal("fetch", async () =>
+      new Response("Error code: 1015 — you are being rate limited", {
+        status: 403,
+        headers: { "cf-mitigated": "challenge" },
+      }),
+    );
+
+    const { health } = await ingestFeeds({ cached: false });
+    const message = health[0].error ?? "";
+
+    // A bare "HTTP 403" cannot distinguish a rate limit from a real block.
+    expect(message).toContain("HTTP 403");
+    expect(message).toContain("cf-mitigated: challenge");
+    expect(message).toContain("Cloudflare 1015");
+  });
+
   it("keeps one dead feed from emptying the page", async () => {
     vi.stubGlobal("fetch", async (url: string) =>
       url.includes("gamingonphone") ? fail(403) : ok(),

@@ -198,6 +198,35 @@ function isRetryable(error: unknown): boolean {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Build a failure message that says *why*, not just the status.
+ *
+ * A bare "HTTP 403" is indistinguishable between a WAF challenge, a rate
+ * limit, and a genuine block, which is exactly the distinction needed to know
+ * whether retrying is pointless. Cloudflare states its reason in
+ * `cf-mitigated`, and its error pages carry a numeric code in the body.
+ * The body is read only on failure and only the first 200 characters.
+ */
+async function describeRejection(response: Response): Promise<string> {
+  const parts = [`HTTP ${response.status}`];
+
+  const mitigated = response.headers.get("cf-mitigated");
+  if (mitigated) parts.push(`cf-mitigated: ${mitigated}`);
+
+  try {
+    const body = (await response.text()).slice(0, 200);
+    const code = /\berror\s*(?:code)?[: ]\s*(\d{3,4})\b/i.exec(body)?.[1];
+    if (code) parts.push(`Cloudflare ${code}`);
+    else if (/just a moment|checking your browser|challenge/i.test(body)) {
+      parts.push("bot challenge page");
+    }
+  } catch {
+    // The body is a nicety; never let reading it mask the real status.
+  }
+
+  return parts.join(" · ");
+}
+
+/**
  * Fetch and parse one feed, keeping only truncated items.
  *
  * Throws on any failure rather than returning an error value, which is what
@@ -216,7 +245,7 @@ async function fetchOnce(source: Source): Promise<TimelessItem[]> {
   });
 
   if (!response.ok) {
-    throw new FeedError(`HTTP ${response.status}`, response.status);
+    throw new FeedError(await describeRejection(response), response.status);
   }
 
   const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));

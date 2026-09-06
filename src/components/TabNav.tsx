@@ -15,7 +15,7 @@ export function TabNav() {
     <div className="border-b border-rule-strong bg-panel">
       <div className="mx-auto flex max-w-[1400px] items-baseline gap-6 px-4 py-2">
         <span className="font-display text-[17px] font-semibold tracking-tight">
-          Mobile gaming news hub
+          Mobile gaming news
         </span>
         <nav aria-label="Sections" className="flex items-baseline gap-4">
           {TABS.map((tab) => {

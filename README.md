@@ -1,4 +1,4 @@
-# Mobile gaming news hub
+# Mobile gaming news
 
 Fifteen mobile games industry feeds merged into one dense page, built for
 scanning rather than reading. Every row links out to the publisher.
@@ -186,6 +186,13 @@ constant.
 Each feed gets a 10-second timeout. A feed that fails, times out, or returns a
 non-200 is skipped and recorded; it never blanks the page. What happened shows
 on the Sources tab under feed health.
+
+Some publishers sit behind a WAF that intermittently answers 403 to a
+server-side request while a browser gets 200 — throttling rather than a
+refusal, and most likely right after a "Check now" fires fifteen requests at
+once. A failed fetch is retried once after 800 ms on 403, 429 and 5xx, and is
+never cached, so the next render tries again rather than showing the feed as
+dead for the rest of the window.
 
 Feed bytes are decoded using the charset the server declares, falling back to
 the XML declaration and then UTF-8. Getting this wrong produces mojibake rather

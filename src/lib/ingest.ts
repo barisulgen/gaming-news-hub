@@ -44,7 +44,7 @@ const parser: Parser<Record<string, unknown>, RawItem> = new Parser({
  */
 const REQUEST_HEADERS: Record<string, string> = {
   "user-agent":
-    "Mozilla/5.0 (compatible; MobileGamingNewsHub/1.0; +https://github.com/mobile-gaming-news-hub)",
+    "Mozilla/5.0 (compatible; MobileGamingNews/1.0; +https://github.com/mobile-gaming-news)",
   accept: "application/rss+xml, application/xml, text/xml, application/atom+xml;q=0.9, */*;q=0.8",
 };
 
@@ -150,52 +150,97 @@ function withDates(item: TimelessItem, now: number): FeedItem {
   };
 }
 
-/** What one source contributes, before the age cutoff and cap are applied. */
-interface SourceResult {
-  items: TimelessItem[];
-  ok: boolean;
-  error?: string;
+/**
+ * Statuses worth one retry.
+ *
+ * GamingonPhone sits behind Cloudflare, which intermittently answers 403 to a
+ * server-side client that a browser and curl both get 200 from moments later —
+ * throttling rather than a real refusal, and it shows up after several feeds
+ * are fetched in quick succession. 429 and the 5xx range are transient for the
+ * same reason.
+ */
+const TRANSIENT_STATUS = new Set([403, 408, 425, 429, 500, 502, 503, 504]);
+
+const RETRY_DELAY_MS = 800;
+
+class FeedError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "FeedError";
+    this.status = status;
+  }
 }
+
+/** Turn anything thrown during a fetch into one readable message. */
+function toFeedError(error: unknown): FeedError {
+  if (error instanceof FeedError) return error;
+
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      return new FeedError(`Timed out after ${FEED_TIMEOUT_MS / 1000}s`);
+    }
+    return new FeedError(error.message);
+  }
+
+  return new FeedError("Unknown error");
+}
+
+function isRetryable(error: unknown): boolean {
+  // A network-level failure has no status and is worth one more try.
+  if (error instanceof FeedError) {
+    return error.status === undefined || TRANSIENT_STATUS.has(error.status);
+  }
+  return true;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Fetch and parse one feed, keeping only truncated items.
  *
+ * Throws on any failure rather than returning an error value, which is what
+ * keeps a failure out of the cache — see `readSource`.
+ *
  * `cache: "no-store"` is deliberate. Next's fetch cache would persist the raw
  * XML — hundreds of KB of complete article bodies per feed, written to
  * .next/cache — which is exactly what this app promises not to store, and it is
- * also what made GameDev Reports' 2.4MB feed blow the 2MB cache-item limit and
- * log an error on every render. The small derived result is cached instead, one
- * layer up in `readSource`.
+ * also what made GameDev Reports' 2.4MB feed blow the 2MB cache-item limit.
  */
-async function fetchSourceUncached(source: Source): Promise<SourceResult> {
+async function fetchOnce(source: Source): Promise<TimelessItem[]> {
+  const response = await fetch(source.url, {
+    headers: REQUEST_HEADERS,
+    signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new FeedError(`HTTP ${response.status}`, response.status);
+  }
+
+  const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
+  const parsed = await parser.parseString(xml);
+
+  return (parsed.items ?? [])
+    .map((raw) => toTimelessItem(raw, source))
+    .filter((item): item is TimelessItem => item !== null);
+}
+
+/** One retry on a transient failure, then give up and let the error out. */
+async function fetchSourceItems(source: Source): Promise<TimelessItem[]> {
   try {
-    const response = await fetch(source.url, {
-      headers: REQUEST_HEADERS,
-      signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      return { items: [], ok: false, error: `HTTP ${response.status}` };
-    }
-
-    const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
-    const parsed = await parser.parseString(xml);
-
-    const items = (parsed.items ?? [])
-      .map((raw) => toTimelessItem(raw, source))
-      .filter((item): item is TimelessItem => item !== null);
-
-    return { items, ok: true };
+    return await fetchOnce(source);
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.name === "TimeoutError" || error.name === "AbortError"
-          ? `Timed out after ${FEED_TIMEOUT_MS / 1000}s`
-          : error.message
-        : "Unknown error";
+    if (!isRetryable(error)) throw toFeedError(error);
 
-    return { items: [], ok: false, error: message };
+    await sleep(RETRY_DELAY_MS);
+
+    try {
+      return await fetchOnce(source);
+    } catch (retryError) {
+      throw toFeedError(retryError);
+    }
   }
 }
 
@@ -206,14 +251,19 @@ async function fetchSourceUncached(source: Source): Promise<SourceResult> {
  * time-varying may be passed in — hence the cutoff, the cap and the date
  * formatting all live outside this layer. Rebuilding the wrapper per call would
  * also defeat it, so the readers are memoised here.
+ *
+ * Because `fetchSourceItems` throws rather than returning an error value, a
+ * failure is never written to the cache. That matters: caching one transient
+ * 403 would mark a healthy feed dead for the whole 15 minute window, and the
+ * next render would keep reporting it dead without retrying.
  */
-const readers = new Map<string, () => Promise<SourceResult>>();
+const readers = new Map<string, () => Promise<TimelessItem[]>>();
 
-function readSource(source: Source): Promise<SourceResult> {
+function readSource(source: Source): Promise<TimelessItem[]> {
   let reader = readers.get(source.id);
 
   if (!reader) {
-    reader = unstable_cache(() => fetchSourceUncached(source), ["feed", source.id], {
+    reader = unstable_cache(() => fetchSourceItems(source), ["feed", source.id], {
       revalidate: REVALIDATE_SECONDS,
       tags: [FEEDS_TAG],
     });
@@ -229,14 +279,15 @@ async function collectSource(
   useCache: boolean,
 ): Promise<{ items: FeedItem[]; health: FeedHealth }> {
   const base = { sourceId: source.id, sourceName: source.name, url: source.url };
-  const {
-    items: parsedItems,
-    ok,
-    error,
-  } = useCache ? await readSource(source) : await fetchSourceUncached(source);
 
-  if (!ok) {
-    return { items: [], health: { ...base, itemCount: 0, ok: false, error } };
+  let parsedItems: TimelessItem[];
+  try {
+    parsedItems = useCache ? await readSource(source) : await fetchSourceItems(source);
+  } catch (error) {
+    return {
+      items: [],
+      health: { ...base, itemCount: 0, ok: false, error: toFeedError(error).message },
+    };
   }
 
   // Age cutoff runs before the cap, so a weekly publisher keeps everything it

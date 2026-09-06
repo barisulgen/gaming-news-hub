@@ -264,11 +264,59 @@ async function fetchOnce(source: Source): Promise<TimelessItem[]> {
     throw new FeedError(message, response.status, permanent);
   }
 
-  const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
-  const parsed = await parser.parseString(xml);
+  const text = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
+
+  if (source.kind === "wp-json") return wpPostsToItems(text, source);
+
+  const parsed = await parser.parseString(text);
 
   return (parsed.items ?? [])
     .map((raw) => toTimelessItem(raw, source))
+    .filter((item): item is TimelessItem => item !== null);
+}
+
+/** The subset of a WordPress REST post this app asks for and reads. */
+interface WpPost {
+  link?: string;
+  date_gmt?: string;
+  title?: { rendered?: string };
+  excerpt?: { rendered?: string };
+}
+
+/**
+ * Read a WordPress REST collection instead of an RSS feed.
+ *
+ * Some publishers put bot protection on their feed path while leaving the REST
+ * API open. It is the same public content from the same site, carries the same
+ * fields, and `_fields` keeps the response small — the excerpt arrives already
+ * short, so far less is transferred than the feed sends.
+ *
+ * `date_gmt` has no timezone suffix, so it is read as UTC explicitly rather
+ * than being parsed as local time.
+ */
+function wpPostsToItems(body: string, source: Source): TimelessItem[] {
+  const parsed: unknown = JSON.parse(body);
+  if (!Array.isArray(parsed)) return [];
+
+  return (parsed as WpPost[])
+    .map((post) => {
+      const link = post.link?.trim();
+      const title = toExcerpt(post.title?.rendered ?? "");
+      if (!link || !title) return null;
+
+      const excerpt = toExcerpt(post.excerpt?.rendered ?? "");
+      const stamp = post.date_gmt ? Date.parse(`${post.date_gmt}Z`) : Number.NaN;
+
+      return {
+        link,
+        title,
+        excerpt: excerpt === title ? "" : excerpt,
+        sourceId: source.id,
+        sourceName: source.name,
+        topic: classify(title, excerpt),
+        timestamp: Number.isNaN(stamp) ? 0 : stamp,
+      };
+    })
     .filter((item): item is TimelessItem => item !== null);
 }
 

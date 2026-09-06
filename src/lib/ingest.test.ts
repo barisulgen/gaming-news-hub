@@ -74,8 +74,11 @@ describe("transient failure handling", () => {
       </item>
     </channel></rss>`;
 
-  const ok = () =>
-    new Response(RSS, { status: 200, headers: { "content-type": "application/rss+xml" } });
+  /** Sources differ in kind, so a stub must answer each in its own format. */
+  const ok = (url = "") =>
+    url.includes("wp-json")
+      ? new Response(JSON.stringify([]), { status: 200 })
+      : new Response(RSS, { status: 200, headers: { "content-type": "application/rss+xml" } });
   const fail = (status: number) => new Response("blocked", { status });
 
   afterEach(() => {
@@ -87,7 +90,7 @@ describe("transient failure handling", () => {
     vi.stubGlobal("fetch", async (url: string) => {
       const n = (calls.get(url) ?? 0) + 1;
       calls.set(url, n);
-      return n === 1 ? fail(403) : ok();
+      return n === 1 ? fail(403) : ok(url);
     });
 
     const { health } = await ingestFeeds({ cached: false });
@@ -175,9 +178,36 @@ describe("transient failure handling", () => {
     expect(others.every(([, ua]) => ua.includes("MobileGamingNews"))).toBe(true);
   });
 
+  it("reads a wp-json source into the same shape as an RSS one", async () => {
+    const post = {
+      link: "https://gamingonphone.com/news/a-story/",
+      date_gmt: new Date(Date.now() - 3600_000).toISOString().replace("Z", ""),
+      title: { rendered: "Studio raises &#8217;25 funding round" },
+      excerpt: { rendered: "<p>A short excerpt.</p>" },
+    };
+
+    vi.stubGlobal("fetch", async (url: string) =>
+      url.includes("wp-json")
+        ? new Response(JSON.stringify([post]), { status: 200 })
+        : new Response("<rss><channel></channel></rss>", { status: 200 }),
+    );
+
+    const { items } = await ingestFeeds({ cached: false });
+    const row = items.find((i) => i.sourceId === "gamingonphone");
+
+    expect(row).toBeDefined();
+    // Entities decoded and tags stripped, exactly as the RSS path does.
+    expect(row?.title).toBe("Studio raises ’25 funding round");
+    expect(row?.excerpt).toBe("A short excerpt.");
+    // date_gmt carries no offset; it must be read as UTC, not local time.
+    expect(Math.abs(row!.timestamp - Date.parse(post.date_gmt + "Z"))).toBeLessThan(1000);
+    // And it still classifies like any other row.
+    expect(row?.topic).toBe("deals");
+  });
+
   it("keeps one dead feed from emptying the page", async () => {
     vi.stubGlobal("fetch", async (url: string) =>
-      url.includes("gamingonphone") ? fail(403) : ok(),
+      url.includes("gamingonphone") ? fail(403) : ok(url),
     );
 
     const { items, health } = await ingestFeeds({ cached: false });

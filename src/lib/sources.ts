@@ -39,7 +39,11 @@ export const SOURCES: readonly Source[] = [
   {
     id: "gamingonphone",
     name: "GamingonPhone",
-    url: "https://gamingonphone.com/feed/",
+    // Their /feed/ path answers Netlify's datacenter IPs with a Cloudflare
+    // managed challenge. The WordPress REST API is the same public content
+    // from the same site on a different path, and asks for fewer bytes.
+    url: "https://gamingonphone.com/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt,excerpt",
+    kind: "wp-json",
     headers: BROWSER_HEADERS,
   },
   { id: "naavik", name: "Naavik", url: "https://naavik.co/feed/" },

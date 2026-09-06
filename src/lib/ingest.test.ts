@@ -127,10 +127,7 @@ describe("transient failure handling", () => {
 
   it("reports why a request was rejected, not just the status", async () => {
     vi.stubGlobal("fetch", async () =>
-      new Response("Error code: 1015 — you are being rate limited", {
-        status: 403,
-        headers: { "cf-mitigated": "challenge" },
-      }),
+      new Response("Error code: 1015, you are being rate limited", { status: 403 }),
     );
 
     const { health } = await ingestFeeds({ cached: false });
@@ -138,8 +135,44 @@ describe("transient failure handling", () => {
 
     // A bare "HTTP 403" cannot distinguish a rate limit from a real block.
     expect(message).toContain("HTTP 403");
-    expect(message).toContain("cf-mitigated: challenge");
     expect(message).toContain("Cloudflare 1015");
+  });
+
+  it("does not retry a bot challenge, which no HTTP client can solve", async () => {
+    const calls = new Map<string, number>();
+    vi.stubGlobal("fetch", async (url: string) => {
+      calls.set(url, (calls.get(url) ?? 0) + 1);
+      return new Response("<html>Just a moment...</html>", {
+        status: 403,
+        headers: { "cf-mitigated": "challenge" },
+      });
+    });
+
+    const { health } = await ingestFeeds({ cached: false });
+
+    expect(health[0].error).toContain("cf-mitigated: challenge");
+    // One attempt only: retrying a challenge just re-hits a server that
+    // already refused, and can never succeed.
+    expect([...calls.values()].every((n) => n === 1)).toBe(true);
+  });
+
+  it("sends per-source headers only to that source", async () => {
+    const seen = new Map<string, string>();
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      const headers = (init.headers ?? {}) as Record<string, string>;
+      seen.set(url, headers["user-agent"] ?? "");
+      return new Response("<rss><channel></channel></rss>", { status: 200 });
+    });
+
+    await ingestFeeds({ cached: false });
+
+    const gop = [...seen].find(([url]) => url.includes("gamingonphone"))?.[1] ?? "";
+    const others = [...seen].filter(([url]) => !url.includes("gamingonphone"));
+
+    // GamingonPhone gets a browser client; everyone else keeps the honest one.
+    expect(gop).toContain("Chrome/");
+    expect(gop).not.toContain("MobileGamingNews");
+    expect(others.every(([, ua]) => ua.includes("MobileGamingNews"))).toBe(true);
   });
 
   it("keeps one dead feed from emptying the page", async () => {

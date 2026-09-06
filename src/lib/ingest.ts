@@ -165,11 +165,14 @@ const RETRY_DELAY_MS = 800;
 
 class FeedError extends Error {
   readonly status?: number;
+  /** Set when the response proves retrying cannot help. */
+  readonly permanent: boolean;
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, permanent = false) {
     super(message);
     this.name = "FeedError";
     this.status = status;
+    this.permanent = permanent;
   }
 }
 
@@ -188,8 +191,11 @@ function toFeedError(error: unknown): FeedError {
 }
 
 function isRetryable(error: unknown): boolean {
-  // A network-level failure has no status and is worth one more try.
   if (error instanceof FeedError) {
+    // A bot challenge is not a transient hiccup: no HTTP client can solve it,
+    // so a second attempt only re-hits a server that already said no.
+    if (error.permanent) return false;
+    // A network-level failure has no status and is worth one more try.
     return error.status === undefined || TRANSIENT_STATUS.has(error.status);
   }
   return true;
@@ -206,24 +212,31 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * `cf-mitigated`, and its error pages carry a numeric code in the body.
  * The body is read only on failure and only the first 200 characters.
  */
-async function describeRejection(response: Response): Promise<string> {
+async function describeRejection(
+  response: Response,
+): Promise<{ message: string; permanent: boolean }> {
   const parts = [`HTTP ${response.status}`];
 
   const mitigated = response.headers.get("cf-mitigated");
   if (mitigated) parts.push(`cf-mitigated: ${mitigated}`);
 
+  // A challenge demands the client execute JavaScript to prove it is a
+  // browser. A server-side fetch never can, so this is permanent for us.
+  let permanent = mitigated === "challenge";
+
   try {
     const body = (await response.text()).slice(0, 200);
     const code = /\berror\s*(?:code)?[: ]\s*(\d{3,4})\b/i.exec(body)?.[1];
     if (code) parts.push(`Cloudflare ${code}`);
-    else if (/just a moment|checking your browser|challenge/i.test(body)) {
-      parts.push("bot challenge page");
+    if (/just a moment|checking your browser|challenge/i.test(body)) {
+      if (!code) parts.push("bot challenge page");
+      permanent = true;
     }
   } catch {
     // The body is a nicety; never let reading it mask the real status.
   }
 
-  return parts.join(" · ");
+  return { message: parts.join(" · "), permanent };
 }
 
 /**
@@ -239,13 +252,16 @@ async function describeRejection(response: Response): Promise<string> {
  */
 async function fetchOnce(source: Source): Promise<TimelessItem[]> {
   const response = await fetch(source.url, {
-    headers: REQUEST_HEADERS,
+    // Per-source headers win, so a publisher that needs a browser client or a
+    // feed token gets one without changing how we identify to the rest.
+    headers: { ...REQUEST_HEADERS, ...source.headers },
     signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
     cache: "no-store",
   });
 
   if (!response.ok) {
-    throw new FeedError(await describeRejection(response), response.status);
+    const { message, permanent } = await describeRejection(response);
+    throw new FeedError(message, response.status, permanent);
   }
 
   const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));

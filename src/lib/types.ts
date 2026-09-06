@@ -14,6 +14,11 @@ export interface Source {
   id: string;
   name: string;
   url: string;
+  /**
+   * Per-source request headers, merged over the defaults. For publishers whose
+   * WAF rejects a self-identifying client, or that issue a feed token.
+   */
+  headers?: Record<string, string>;
 }
 
 /**

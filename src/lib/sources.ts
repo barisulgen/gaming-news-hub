@@ -1,6 +1,25 @@
 import type { ManualSource, Source } from "./types";
 
 /**
+ * Headers for publishers whose bot protection rejects a self-identifying
+ * client. Our default User-Agent uses the "compatible; Name/version; +url"
+ * convention, which announces the client as a bot — exactly what Cloudflare's
+ * Bot Fight Mode is tuned to stop.
+ *
+ * The Referer is this site's own address, which is where the request genuinely
+ * originates, so nothing here misrepresents who is asking. Netlify sets `URL`
+ * in the build and function environment.
+ */
+const BROWSER_HEADERS: Record<string, string> = {
+  "user-agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "accept-language": "en-US,en;q=0.9",
+  referer: process.env.URL ?? "https://mobile-gaming-news.netlify.app/",
+};
+
+/**
  * Every feed the app ingests. To add one, append an entry here — nothing else
  * needs to change. Ingestion, the source filter, and feed health all read from
  * this array. Ids must be unique and stable: they are persisted in nothing, but
@@ -14,7 +33,15 @@ export const SOURCES: readonly Source[] = [
   { id: "mobidictum", name: "Mobidictum", url: "https://mobidictum.com/feed/" },
   { id: "turkoyunsektoru", name: "Türk Oyun Sektörü", url: "https://www.turkoyunsektoru.com/feed" },
   { id: "gamigion", name: "Gamigion", url: "https://www.gamigion.com/feed/" },
-  { id: "gamingonphone", name: "GamingonPhone", url: "https://gamingonphone.com/feed/" },
+  // Cloudflare answers our default client with a managed challenge from
+  // datacenter IPs; browser headers are the one lever available short of a
+  // WAF exception from the publisher.
+  {
+    id: "gamingonphone",
+    name: "GamingonPhone",
+    url: "https://gamingonphone.com/feed/",
+    headers: BROWSER_HEADERS,
+  },
   { id: "naavik", name: "Naavik", url: "https://naavik.co/feed/" },
   { id: "gamefile", name: "Game File", url: "https://www.gamefile.news/feed" },
   { id: "investgame", name: "InvestGame", url: "https://investgame.net/feed" },

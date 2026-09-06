@@ -74,11 +74,8 @@ describe("transient failure handling", () => {
       </item>
     </channel></rss>`;
 
-  /** Sources differ in kind, so a stub must answer each in its own format. */
-  const ok = (url = "") =>
-    url.includes("wp-json")
-      ? new Response(JSON.stringify([]), { status: 200 })
-      : new Response(RSS, { status: 200, headers: { "content-type": "application/rss+xml" } });
+  const ok = () =>
+    new Response(RSS, { status: 200, headers: { "content-type": "application/rss+xml" } });
   const fail = (status: number) => new Response("blocked", { status });
 
   afterEach(() => {
@@ -90,7 +87,7 @@ describe("transient failure handling", () => {
     vi.stubGlobal("fetch", async (url: string) => {
       const n = (calls.get(url) ?? 0) + 1;
       calls.set(url, n);
-      return n === 1 ? fail(403) : ok(url);
+      return n === 1 ? fail(403) : ok();
     });
 
     const { health } = await ingestFeeds({ cached: false });
@@ -128,86 +125,9 @@ describe("transient failure handling", () => {
     expect([...calls.values()].every((n) => n === 1)).toBe(true);
   });
 
-  it("reports why a request was rejected, not just the status", async () => {
-    vi.stubGlobal("fetch", async () =>
-      new Response("Error code: 1015, you are being rate limited", { status: 403 }),
-    );
-
-    const { health } = await ingestFeeds({ cached: false });
-    const message = health[0].error ?? "";
-
-    // A bare "HTTP 403" cannot distinguish a rate limit from a real block.
-    expect(message).toContain("HTTP 403");
-    expect(message).toContain("Cloudflare 1015");
-  });
-
-  it("does not retry a bot challenge, which no HTTP client can solve", async () => {
-    const calls = new Map<string, number>();
-    vi.stubGlobal("fetch", async (url: string) => {
-      calls.set(url, (calls.get(url) ?? 0) + 1);
-      return new Response("<html>Just a moment...</html>", {
-        status: 403,
-        headers: { "cf-mitigated": "challenge" },
-      });
-    });
-
-    const { health } = await ingestFeeds({ cached: false });
-
-    expect(health[0].error).toContain("cf-mitigated: challenge");
-    // One attempt only: retrying a challenge just re-hits a server that
-    // already refused, and can never succeed.
-    expect([...calls.values()].every((n) => n === 1)).toBe(true);
-  });
-
-  it("sends per-source headers only to that source", async () => {
-    const seen = new Map<string, string>();
-    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
-      const headers = (init.headers ?? {}) as Record<string, string>;
-      seen.set(url, headers["user-agent"] ?? "");
-      return new Response("<rss><channel></channel></rss>", { status: 200 });
-    });
-
-    await ingestFeeds({ cached: false });
-
-    const gop = [...seen].find(([url]) => url.includes("gamingonphone"))?.[1] ?? "";
-    const others = [...seen].filter(([url]) => !url.includes("gamingonphone"));
-
-    // GamingonPhone gets a browser client; everyone else keeps the honest one.
-    expect(gop).toContain("Chrome/");
-    expect(gop).not.toContain("MobileGamingNews");
-    expect(others.every(([, ua]) => ua.includes("MobileGamingNews"))).toBe(true);
-  });
-
-  it("reads a wp-json source into the same shape as an RSS one", async () => {
-    const post = {
-      link: "https://gamingonphone.com/news/a-story/",
-      date_gmt: new Date(Date.now() - 3600_000).toISOString().replace("Z", ""),
-      title: { rendered: "Studio raises &#8217;25 funding round" },
-      excerpt: { rendered: "<p>A short excerpt.</p>" },
-    };
-
-    vi.stubGlobal("fetch", async (url: string) =>
-      url.includes("wp-json")
-        ? new Response(JSON.stringify([post]), { status: 200 })
-        : new Response("<rss><channel></channel></rss>", { status: 200 }),
-    );
-
-    const { items } = await ingestFeeds({ cached: false });
-    const row = items.find((i) => i.sourceId === "gamingonphone");
-
-    expect(row).toBeDefined();
-    // Entities decoded and tags stripped, exactly as the RSS path does.
-    expect(row?.title).toBe("Studio raises ’25 funding round");
-    expect(row?.excerpt).toBe("A short excerpt.");
-    // date_gmt carries no offset; it must be read as UTC, not local time.
-    expect(Math.abs(row!.timestamp - Date.parse(post.date_gmt + "Z"))).toBeLessThan(1000);
-    // And it still classifies like any other row.
-    expect(row?.topic).toBe("deals");
-  });
-
   it("keeps one dead feed from emptying the page", async () => {
     vi.stubGlobal("fetch", async (url: string) =>
-      url.includes("gamingonphone") ? fail(403) : ok(url),
+      url.includes("gamingonphone") ? fail(403) : ok(),
     );
 
     const { items, health } = await ingestFeeds({ cached: false });

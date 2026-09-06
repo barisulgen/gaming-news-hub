@@ -14,16 +14,6 @@ export interface Source {
   id: string;
   name: string;
   url: string;
-  /**
-   * Per-source request headers, merged over the defaults. For publishers whose
-   * WAF rejects a self-identifying client, or that issue a feed token.
-   */
-  headers?: Record<string, string>;
-  /**
-   * How to read this source. Defaults to "rss". "wp-json" reads a WordPress
-   * REST collection instead, for publishers whose feed path is unreachable.
-   */
-  kind?: "rss" | "wp-json";
 }
 
 /**

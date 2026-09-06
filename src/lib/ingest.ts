@@ -165,14 +165,11 @@ const RETRY_DELAY_MS = 800;
 
 class FeedError extends Error {
   readonly status?: number;
-  /** Set when the response proves retrying cannot help. */
-  readonly permanent: boolean;
 
-  constructor(message: string, status?: number, permanent = false) {
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "FeedError";
     this.status = status;
-    this.permanent = permanent;
   }
 }
 
@@ -191,53 +188,14 @@ function toFeedError(error: unknown): FeedError {
 }
 
 function isRetryable(error: unknown): boolean {
+  // A network-level failure has no status and is worth one more try.
   if (error instanceof FeedError) {
-    // A bot challenge is not a transient hiccup: no HTTP client can solve it,
-    // so a second attempt only re-hits a server that already said no.
-    if (error.permanent) return false;
-    // A network-level failure has no status and is worth one more try.
     return error.status === undefined || TRANSIENT_STATUS.has(error.status);
   }
   return true;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/**
- * Build a failure message that says *why*, not just the status.
- *
- * A bare "HTTP 403" is indistinguishable between a WAF challenge, a rate
- * limit, and a genuine block, which is exactly the distinction needed to know
- * whether retrying is pointless. Cloudflare states its reason in
- * `cf-mitigated`, and its error pages carry a numeric code in the body.
- * The body is read only on failure and only the first 200 characters.
- */
-async function describeRejection(
-  response: Response,
-): Promise<{ message: string; permanent: boolean }> {
-  const parts = [`HTTP ${response.status}`];
-
-  const mitigated = response.headers.get("cf-mitigated");
-  if (mitigated) parts.push(`cf-mitigated: ${mitigated}`);
-
-  // A challenge demands the client execute JavaScript to prove it is a
-  // browser. A server-side fetch never can, so this is permanent for us.
-  let permanent = mitigated === "challenge";
-
-  try {
-    const body = (await response.text()).slice(0, 200);
-    const code = /\berror\s*(?:code)?[: ]\s*(\d{3,4})\b/i.exec(body)?.[1];
-    if (code) parts.push(`Cloudflare ${code}`);
-    if (/just a moment|checking your browser|challenge/i.test(body)) {
-      if (!code) parts.push("bot challenge page");
-      permanent = true;
-    }
-  } catch {
-    // The body is a nicety; never let reading it mask the real status.
-  }
-
-  return { message: parts.join(" · "), permanent };
-}
 
 /**
  * Fetch and parse one feed, keeping only truncated items.
@@ -252,71 +210,20 @@ async function describeRejection(
  */
 async function fetchOnce(source: Source): Promise<TimelessItem[]> {
   const response = await fetch(source.url, {
-    // Per-source headers win, so a publisher that needs a browser client or a
-    // feed token gets one without changing how we identify to the rest.
-    headers: { ...REQUEST_HEADERS, ...source.headers },
+    headers: REQUEST_HEADERS,
     signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
     cache: "no-store",
   });
 
   if (!response.ok) {
-    const { message, permanent } = await describeRejection(response);
-    throw new FeedError(message, response.status, permanent);
+    throw new FeedError(`HTTP ${response.status}`, response.status);
   }
 
-  const text = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
-
-  if (source.kind === "wp-json") return wpPostsToItems(text, source);
-
-  const parsed = await parser.parseString(text);
+  const xml = decodeFeed(await response.arrayBuffer(), response.headers.get("content-type"));
+  const parsed = await parser.parseString(xml);
 
   return (parsed.items ?? [])
     .map((raw) => toTimelessItem(raw, source))
-    .filter((item): item is TimelessItem => item !== null);
-}
-
-/** The subset of a WordPress REST post this app asks for and reads. */
-interface WpPost {
-  link?: string;
-  date_gmt?: string;
-  title?: { rendered?: string };
-  excerpt?: { rendered?: string };
-}
-
-/**
- * Read a WordPress REST collection instead of an RSS feed.
- *
- * Some publishers put bot protection on their feed path while leaving the REST
- * API open. It is the same public content from the same site, carries the same
- * fields, and `_fields` keeps the response small — the excerpt arrives already
- * short, so far less is transferred than the feed sends.
- *
- * `date_gmt` has no timezone suffix, so it is read as UTC explicitly rather
- * than being parsed as local time.
- */
-function wpPostsToItems(body: string, source: Source): TimelessItem[] {
-  const parsed: unknown = JSON.parse(body);
-  if (!Array.isArray(parsed)) return [];
-
-  return (parsed as WpPost[])
-    .map((post) => {
-      const link = post.link?.trim();
-      const title = toExcerpt(post.title?.rendered ?? "");
-      if (!link || !title) return null;
-
-      const excerpt = toExcerpt(post.excerpt?.rendered ?? "");
-      const stamp = post.date_gmt ? Date.parse(`${post.date_gmt}Z`) : Number.NaN;
-
-      return {
-        link,
-        title,
-        excerpt: excerpt === title ? "" : excerpt,
-        sourceId: source.id,
-        sourceName: source.name,
-        topic: classify(title, excerpt),
-        timestamp: Number.isNaN(stamp) ? 0 : stamp,
-      };
-    })
     .filter((item): item is TimelessItem => item !== null);
 }
 

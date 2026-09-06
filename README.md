@@ -4,32 +4,12 @@ Fifteen mobile games industry feeds merged into one dense page, built for
 scanning rather than reading. Every row links out to the publisher.
 
 > [!IMPORTANT]
-> **Run this locally rather than deployed.**
->
-> Several publishers sit behind bot and automation protection that judges
-> requests on the IP address they come from. Traffic from cloud hosts —
-> Netlify, Vercel, AWS and the like — is challenged or refused by default,
-> while the same request from a home connection is allowed straight through.
->
-> A deployed copy of this app will therefore show some feeds as failed on the
-> Sources tab, reporting `HTTP 403`, even though those feeds open perfectly in
-> your browser. GamingonPhone is the current example: Cloudflare answers it
-> with a managed challenge, which no server-side HTTP client can solve.
->
-> Nothing in the app can fix this. It is not a User-Agent, a retry policy or a
-> caching problem — the decision is made on IP reputation before the request is
-> really considered. The only real remedies are an exception granted by the
-> publisher, or running the app somewhere that is not a datacenter.
->
-> So: clone it and run it on your own machine. Every feed works from a normal
-> home connection.
->
-> ```bash
-> git clone https://github.com/barisulgen/gaming-news-hub.git
-> cd gaming-news-hub
-> npm install
-> npm run dev
-> ```
+> **Run this locally rather than deployed.** Several publishers sit behind bot
+> protection that judges requests by originating IP, so a cloud host such as
+> Netlify gets challenged where a home connection passes — a deployed copy will
+> show some feeds as failed on the Sources tab even though they open fine in
+> your browser. Nothing in the app can fix that, so clone it and run it on your
+> own machine, where every feed works.
 
 ```bash
 npm install

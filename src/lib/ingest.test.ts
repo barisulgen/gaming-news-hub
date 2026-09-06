@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dedupeByLink, ingestFeeds } from "./ingest";
+import { SOURCES } from "./sources";
 import type { FeedItem } from "./types";
 
 const item = (link: string, sourceName: string): FeedItem => ({
@@ -126,14 +127,15 @@ describe("transient failure handling", () => {
   });
 
   it("keeps one dead feed from emptying the page", async () => {
-    vi.stubGlobal("fetch", async (url: string) =>
-      url.includes("gamingonphone") ? fail(403) : ok(),
-    );
+    // Taken from SOURCES rather than hardcoded, so moving a publisher in or
+    // out of the feed list cannot silently turn this into a no-op.
+    const target = SOURCES[0];
+    vi.stubGlobal("fetch", async (url: string) => (url === target.url ? fail(403) : ok()));
 
     const { items, health } = await ingestFeeds({ cached: false });
 
     expect(items.length).toBeGreaterThan(0);
     expect(health.filter((f) => !f.ok)).toHaveLength(1);
-    expect(health.find((f) => !f.ok)?.sourceId).toBe("gamingonphone");
+    expect(health.find((f) => !f.ok)?.sourceId).toBe(target.id);
   });
 });

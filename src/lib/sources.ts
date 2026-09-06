@@ -14,7 +14,6 @@ export const SOURCES: readonly Source[] = [
   { id: "mobidictum", name: "Mobidictum", url: "https://mobidictum.com/feed/" },
   { id: "turkoyunsektoru", name: "Türk Oyun Sektörü", url: "https://www.turkoyunsektoru.com/feed" },
   { id: "gamigion", name: "Gamigion", url: "https://www.gamigion.com/feed/" },
-  { id: "gamingonphone", name: "GamingonPhone", url: "https://gamingonphone.com/feed/" },
   { id: "naavik", name: "Naavik", url: "https://naavik.co/feed/" },
   { id: "gamefile", name: "Game File", url: "https://www.gamefile.news/feed" },
   { id: "investgame", name: "InvestGame", url: "https://investgame.net/feed" },
@@ -58,6 +57,15 @@ export const EMAIL_SOURCES: readonly ManualSource[] = [
 ];
 
 export const MANUAL_SOURCES: readonly ManualSource[] = [
+  // Has a perfectly good feed, but Cloudflare answers datacenter IPs with a
+  // managed challenge, so a deployed copy can never read it. Works when the
+  // app runs on a home connection; listed here because the deployed site is
+  // the case that has to be honest.
+  {
+    name: "GamingonPhone",
+    url: "https://gamingonphone.com",
+    note: "feed blocked to servers",
+  },
   { name: "Sensor Tower", url: "https://sensortower.com/blog" },
   { name: "AppMagic", url: "https://appmagic.rocks/research" },
   { name: "Newzoo", url: "https://newzoo.com" },

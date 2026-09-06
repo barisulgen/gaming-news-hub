@@ -28,7 +28,12 @@ function Launcher({
               rel="noopener"
               className="flex items-baseline justify-between gap-4 py-[7px] text-[14px] hover:bg-panel"
             >
-              <span>{source.name}</span>
+              <span>
+                {source.name}
+                {source.note ? (
+                  <span className="ml-2 text-[12px] text-meta">{source.note}</span>
+                ) : null}
+              </span>
               <span className="truncate text-[12px] text-meta">
                 {source.url.replace(/^https?:\/\//, "")}
               </span>
@@ -98,7 +103,7 @@ export default async function SourcesPage() {
 
       <Launcher
         title="Check manually"
-        note="Publishes reports, not an article stream."
+        note="Publishes reports, not an article stream, except where noted."
         sources={MANUAL_SOURCES}
       />
 

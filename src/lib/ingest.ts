@@ -153,11 +153,13 @@ function withDates(item: TimelessItem, now: number): FeedItem {
 /**
  * Statuses worth one retry.
  *
- * GamingonPhone sits behind Cloudflare, which intermittently answers 403 to a
- * server-side client that a browser and curl both get 200 from moments later —
- * throttling rather than a real refusal, and it shows up after several feeds
- * are fetched in quick succession. 429 and the 5xx range are transient for the
- * same reason.
+ * A publisher behind a CDN can answer 403 to a server-side client and 200 to
+ * the same request moments later — throttling rather than a real refusal,
+ * usually after several feeds are fetched in quick succession. 429 and the 5xx
+ * range are transient for the same reason.
+ *
+ * A standing block is a different thing and no number of retries helps; that
+ * is why GamingonPhone is a manual source rather than a feed.
  */
 const TRANSIENT_STATUS = new Set([403, 408, 425, 429, 500, 502, 503, 504]);
 

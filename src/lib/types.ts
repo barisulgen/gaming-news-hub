@@ -64,4 +64,6 @@ export interface IngestResult {
 export interface ManualSource {
   name: string;
   url: string;
+  /** Why this one is not ingested, when it differs from the section's reason. */
+  note?: string;
 }

@@ -1,6 +1,6 @@
 # Mobile gaming news
 
-Fifteen mobile games industry feeds merged into one dense page, built for
+Fourteen mobile games industry feeds merged into one dense page, built for
 scanning rather than reading. Every row links out to the publisher.
 
 > [!IMPORTANT]
@@ -168,7 +168,7 @@ wraps the parsed items in `unstable_cache`, keyed per source. Caching the raw
 XML instead would write complete article bodies to disk — the thing this app
 promises not to store — and GameDev Reports' 2.4 MB feed would exceed Next's
 2 MB cache-item limit and log an error on every render. Both tabs share the one
-cached result rather than each hitting all 15 feeds.
+cached result rather than each hitting all 14 feeds.
 
 A request arriving inside the window is served the cached page immediately. The
 first request after the window expires gets the cached page too, and triggers a
@@ -197,7 +197,7 @@ on the Sources tab under feed health.
 
 Some publishers sit behind a WAF that intermittently answers 403 to a
 server-side request while a browser gets 200 — throttling rather than a
-refusal, and most likely right after a "Check now" fires fifteen requests at
+refusal, and most likely right after a "Check now" fires fourteen requests at
 once. A failed fetch is retried once after 800 ms on 403, 429 and 5xx, and is
 never cached, so the next render tries again rather than showing the feed as
 dead for the rest of the window.

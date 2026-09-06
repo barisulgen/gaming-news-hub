@@ -23,7 +23,7 @@ const archivo = Archivo({
 export const metadata: Metadata = {
   title: "Mobile gaming news",
   description:
-    "Mobile games industry press from 15 feeds on one page, for people who need to scan it quickly.",
+    "Mobile games industry press from 14 feeds on one page, for people who need to scan it quickly.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

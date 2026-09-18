@@ -3,6 +3,8 @@
 Fourteen mobile games industry feeds merged into one dense page, built for
 scanning rather than reading. Every row links out to the publisher.
 
+<img width="1398" height="742" alt="mgnh" src="https://github.com/user-attachments/assets/eb92a96a-755f-4464-aed8-ffd03d78cc52" />
+
 > [!IMPORTANT]
 > **Run this locally rather than deployed.** Several publishers sit behind bot
 > protection that judges requests by originating IP, so a cloud host such as
